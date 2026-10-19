@@ -8,9 +8,12 @@
 <!-- Náhled při sdílení odkazu (Messenger, WhatsApp, Slack, …).
      og:image musí mít absolutní URL, jinak ho většina služeb ignoruje. -->
 <meta property="og:type" content="website">
+<meta property="og:url" content="https://hiiampadik.github.io/marie-padik/">
+<meta property="og:locale" content="cs_CZ">
 <meta property="og:title" content="Chytí Pádík Marii?">
 <meta property="og:description" content="Chytí Pádík Marii?">
-<meta property="og:image" content="og-image.jpg">
+<meta property="og:image" content="https://hiiampadik.github.io/marie-padik/og-image.jpg">
+<meta property="og:image:type" content="image/jpeg">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta name="twitter:card" content="summary_large_image">
@@ -22,10 +25,17 @@
     height: 100%;
     overflow: hidden;
     background: #fff;
+    touch-action: none;       /* na telefonu bez scrollu a zoomu dvojklepnutím */
+    -webkit-tap-highlight-color: transparent;
+    -webkit-user-select: none;
+    user-select: none;
   }
   /* SVG nápisy jsou exportované ve stejném měřítku (výška písmen ~170 jednotek
      viewBoxu), takže stejná jednotka = stejně velké písmo. */
-  :root { --u: min(0.055vw, 0.38px); }
+  :root {
+    --u: min(0.055vw, 0.38px);
+    --small-font: 600 max(12px, calc(40 * var(--u))) / 1.2 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
   #title {
     position: fixed;
     top: 5vh;
@@ -59,7 +69,7 @@
     position: fixed;
     left: 0;
     top: 0;
-    height: 200px;
+    height: min(200px, 22vh);
     width: auto;
     pointer-events: none;
     user-select: none;
@@ -75,7 +85,7 @@
     z-index: 4;
     width: 6ch;               /* přesně „10,0 m“, kratší hodnoty se zarovnají vpravo */
     margin: -0.6em 0 0 -3ch;  /* střed boxu = bod mezi postavičkami */
-    font: 600 calc(40 * var(--u)) / 1.2 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font: var(--small-font);
     color: #D65046;
     text-align: right;
     white-space: pre;
@@ -84,18 +94,34 @@
     will-change: transform;
   }
 
-  #caught, #nomouse {
+  /* nápověda jen na dotykových zařízeních */
+  #hint {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: calc(4vh + env(safe-area-inset-bottom));
+    z-index: 5;
+    margin: 0;
+    font: var(--small-font);
+    color: #D65046;
+    text-align: center;
+    pointer-events: none;
+    display: none;
+  }
+  @media (hover: none), (pointer: coarse) {
+    #hint { display: block; }
+  }
+
+  #caught {
     position: fixed;
     inset: 0;
     z-index: 10;
     display: none;
     align-items: center;
     justify-content: center;
-    background: #fff;
   }
   #caught { background: #FF503D; }
   #caught img { width: calc(580 * var(--u)); height: auto; }
-  #nomouse img { width: min(80vw, 700px); height: auto; }
   .show { display: flex !important; }
 </style>
 </head>
@@ -108,26 +134,20 @@
 <img id="m" class="chaser" src="m.png" alt="">
 <img id="p" class="chaser" src="p.png" alt="">
 <div id="dist"></div>
+<p id="hint">Marie utíká tam, kam klikneš</p>
 
 <div id="caught"><img src="group-3.svg" alt=""></div>
-<div id="nomouse"><img src="group-4.svg" alt=""></div>
 
 <script>
 (() => {
   const $ = (id) => document.getElementById(id);
   const m = $('m'), p = $('p'), start = $('start'), dist = $('dist');
 
-  // Zařízení bez myši (telefon, tablet) → jen Group 4.
-  if (!matchMedia('(hover: hover) and (pointer: fine)').matches) {
-    $('stage').style.display = 'none';
-    $('nomouse').classList.add('show');
-    return;
-  }
-
   const SPEED = 180;        // px/s na začátku
   const ACCEL = 15;         // px/s za každou sekundu honičky
   const HIT_INSET = 0.25;   // okraje PNG jsou průhledné, kolize se počítá z vnitřku
   const MAX_METERS = 10;    // počáteční mezera mezi postavičkami = 10 m, kolize = 0 m
+  const M_SPEED = 450;      // px/s, jak rychle postavička na telefonu dojde na místo klepnutí
 
   let mouseX = innerWidth / 2, mouseY = innerHeight / 2;
   let px = 0, py = 0, chasing = false, over = false, startedAt = 0, last = 0, startGap = 1;
@@ -136,11 +156,42 @@
     el.style.transform = `translate(${cx - el.offsetWidth / 2}px, ${cy - el.offsetHeight / 2}px)`;
   };
 
-  addEventListener('mousemove', (e) => {
-    mouseX = e.clientX;
-    mouseY = e.clientY;
+  // mouseX/mouseY = aktuální střed postavičky m (na telefonu se teprve dojíždí k cíli).
+  const moveM = (x, y) => {
+    mouseX = x;
+    mouseY = y;
     m.style.visibility = 'visible';
     place(m, mouseX, mouseY);
+  };
+
+  // Dotyk: postavička plynule dojde na místo klepnutí.
+  let targetX = 0, targetY = 0, walking = false, walkLast = 0;
+  function walk(now) {
+    const dt = Math.min((now - walkLast) / 1000, 0.05);
+    walkLast = now;
+    const dx = targetX - mouseX, dy = targetY - mouseY, len = Math.hypot(dx, dy);
+    const step = Math.min(M_SPEED * dt, len);
+    if (len > 0) moveM(mouseX + dx / len * step, mouseY + dy / len * step);
+    walking = step < len && !over;
+    if (walking) requestAnimationFrame(walk);
+  }
+
+  addEventListener('pointermove', (e) => {
+    if (e.pointerType === 'mouse') moveM(e.clientX, e.clientY);
+  });
+  addEventListener('pointerdown', (e) => {
+    // Myš, nebo první klepnutí, kdy postavička ještě není vidět → rovnou na místo.
+    if (e.pointerType === 'mouse' || m.style.visibility !== 'visible') {
+      moveM(e.clientX, e.clientY);
+      return;
+    }
+    targetX = e.clientX;
+    targetY = e.clientY;
+    if (!walking) {
+      walking = true;
+      walkLast = performance.now();
+      requestAnimationFrame(walk);
+    }
   });
   document.documentElement.addEventListener('mouseleave', () => { m.style.visibility = 'hidden'; });
 
