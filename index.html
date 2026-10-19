@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mapa</title>
+<meta name="description" content="Chytí Pádík Marii?">
+<!-- Náhled při sdílení odkazu (Messenger, WhatsApp, Slack, …).
+     og:image musí mít absolutní URL, jinak ho většina služeb ignoruje. -->
+<meta property="og:type" content="website">
+<meta property="og:title" content="Chytí Pádík Marii?">
+<meta property="og:description" content="Chytí Pádík Marii?">
+<meta property="og:image" content="og-image.jpg">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="preload" href="group-3.svg" as="image">
+<style>
+  * { cursor: none !important; box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    height: 100%;
+    overflow: hidden;
+    background: #fff;
+  }
+  /* SVG nápisy jsou exportované ve stejném měřítku (výška písmen ~170 jednotek
+     viewBoxu), takže stejná jednotka = stejně velké písmo. */
+  :root { --u: min(0.055vw, 0.38px); }
+  #title {
+    position: fixed;
+    top: 5vh;
+    left: 50%;
+    transform: translateX(-50%);
+    width: calc(999 * var(--u));
+    height: auto;
+  }
+  #stage {
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  #start {
+    padding: 0;
+    border: 0;
+    background: none;
+  }
+  #start img { display: block; width: calc(731 * var(--u)); height: auto; }
+  /* podtržení, při hoveru zmizí */
+  #start::after {
+    content: "";
+    display: block;
+    margin-top: calc(24 * var(--u));
+    border-top: calc(14 * var(--u)) solid #D65046;
+  }
+  #start:hover::after { visibility: hidden; }
+
+  .chaser {
+    position: fixed;
+    left: 0;
+    top: 0;
+    height: 200px;
+    width: auto;
+    pointer-events: none;
+    user-select: none;
+    will-change: transform;
+  }
+  #m { z-index: 3; visibility: hidden; }
+  #p { z-index: 2; display: none; }
+
+  #dist {
+    position: fixed;
+    left: 0;
+    top: 0;
+    z-index: 4;
+    width: 6ch;               /* přesně „10,0 m“, kratší hodnoty se zarovnají vpravo */
+    margin: -0.6em 0 0 -3ch;  /* střed boxu = bod mezi postavičkami */
+    font: 600 calc(40 * var(--u)) / 1.2 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    color: #D65046;
+    text-align: right;
+    white-space: pre;
+    pointer-events: none;
+    display: none;
+    will-change: transform;
+  }
+
+  #caught, #nomouse {
+    position: fixed;
+    inset: 0;
+    z-index: 10;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    background: #fff;
+  }
+  #caught { background: #FF503D; }
+  #caught img { width: calc(580 * var(--u)); height: auto; }
+  #nomouse img { width: min(80vw, 700px); height: auto; }
+  .show { display: flex !important; }
+</style>
+</head>
+<body>
+<img id="title" src="group-1.svg" alt="">
+<div id="stage">
+  <button id="start" type="button"><img src="group-2.svg" alt="Start"></button>
+</div>
+
+<img id="m" class="chaser" src="m.png" alt="">
+<img id="p" class="chaser" src="p.png" alt="">
+<div id="dist"></div>
+
+<div id="caught"><img src="group-3.svg" alt=""></div>
+<div id="nomouse"><img src="group-4.svg" alt=""></div>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const m = $('m'), p = $('p'), start = $('start'), dist = $('dist');
+
+  // Zařízení bez myši (telefon, tablet) → jen Group 4.
+  if (!matchMedia('(hover: hover) and (pointer: fine)').matches) {
+    $('stage').style.display = 'none';
+    $('nomouse').classList.add('show');
+    return;
+  }
+
+  const SPEED = 180;        // px/s na začátku
+  const ACCEL = 15;         // px/s za každou sekundu honičky
+  const HIT_INSET = 0.25;   // okraje PNG jsou průhledné, kolize se počítá z vnitřku
+  const MAX_METERS = 10;    // počáteční mezera mezi postavičkami = 10 m, kolize = 0 m
+
+  let mouseX = innerWidth / 2, mouseY = innerHeight / 2;
+  let px = 0, py = 0, chasing = false, over = false, startedAt = 0, last = 0, startGap = 1;
+
+  const place = (el, cx, cy) => {
+    el.style.transform = `translate(${cx - el.offsetWidth / 2}px, ${cy - el.offsetHeight / 2}px)`;
+  };
+
+  addEventListener('mousemove', (e) => {
+    mouseX = e.clientX;
+    mouseY = e.clientY;
+    m.style.visibility = 'visible';
+    place(m, mouseX, mouseY);
+  });
+  document.documentElement.addEventListener('mouseleave', () => { m.style.visibility = 'hidden'; });
+
+  start.addEventListener('click', () => {
+    start.style.display = 'none';
+    p.style.display = 'block';
+    // Start v rohu nejdál od myši.
+    px = mouseX < innerWidth / 2 ? innerWidth - p.offsetWidth / 2 : p.offsetWidth / 2;
+    py = mouseY < innerHeight / 2 ? innerHeight - p.offsetHeight / 2 : p.offsetHeight / 2;
+    place(p, px, py);
+    startGap = Math.max(gap(box(m), box(p)), 1);
+    dist.style.display = 'block';
+    chasing = true;
+    startedAt = last = performance.now();
+    requestAnimationFrame(tick);
+  });
+
+  const box = (el) => {
+    const r = el.getBoundingClientRect();
+    const dx = r.width * HIT_INSET, dy = r.height * HIT_INSET / 2;
+    return { l: r.left + dx, r: r.right - dx, t: r.top + dy, b: r.bottom - dy };
+  };
+  const overlaps = (a, b) => a.l < b.r && a.r > b.l && a.t < b.b && a.b > b.t;
+  // Nejkratší vzdálenost mezi hranami kolizních obdélníků (0 = dotyk).
+  const gap = (a, b) => Math.hypot(
+    Math.max(0, a.l - b.r, b.l - a.r),
+    Math.max(0, a.t - b.b, b.t - a.b),
+  );
+
+  // Přesně uprostřed mezi středy postaviček (v ose x i y).
+  function showDistance(meters) {
+    dist.textContent = meters.toFixed(1).replace('.', ',') + ' m';
+    dist.style.transform = `translate(${(mouseX + px) / 2}px, ${(mouseY + py) / 2}px)`;
+  }
+
+  function tick(now) {
+    if (!chasing || over) return;
+    const dt = Math.min((now - last) / 1000, 0.05);
+    last = now;
+    const speed = SPEED + ACCEL * (now - startedAt) / 1000;
+    const dx = mouseX - px, dy = mouseY - py, len = Math.hypot(dx, dy);
+    if (len > 0) {
+      const step = Math.min(speed * dt, len);
+      px += dx / len * step;
+      py += dy / len * step;
+    }
+    place(p, px, py);
+
+    const mb = box(m), pb = box(p);
+    showDistance(Math.min(MAX_METERS, MAX_METERS * gap(mb, pb) / startGap));
+
+    if (m.style.visibility === 'visible' && overlaps(mb, pb)) {
+      over = true;
+      showDistance(0);
+      $('caught').classList.add('show');
+      return;
+    }
+    requestAnimationFrame(tick);
+  }
+})();
+</script>
+</body>
+</html>
